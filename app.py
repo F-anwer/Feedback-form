@@ -19,7 +19,7 @@ st.set_page_config(page_title="Moellim Course Page Review", layout="wide")
 # ==========================================
 # CONFIGURATION: SUBMISSION DEADLINE
 # ==========================================
-SUBMISSION_DEADLINE = datetime(2026, 11, 1, 23, 59, 59)
+SUBMISSION_DEADLINE = datetime(2026, 10, 16, 7, 40, 59)
 
 # Sidebar Role Selector
 st.sidebar.title("Navigation")
@@ -264,7 +264,7 @@ if role == "Instructor Portal":
 # 2. EVALUATOR / ADMIN PORTAL (PROTECTED)
 # ==========================================
 elif role == "Evaluator (Admin) Portal":
-    st.title("QEC Evaluator Portal")
+    st.title("Moellim Page Evaluator Portal")
 
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
@@ -282,7 +282,7 @@ elif role == "Evaluator (Admin) Portal":
             st.session_state.authenticated = False
             st.rerun()
 
-        st.subheader("Manage & Grade Submissions")
+        st.subheader("Manage & Review Submissions")
 
         res = supabase.table("submissions").select("*").order("created_at", desc=True).execute()
         rows = res.data
