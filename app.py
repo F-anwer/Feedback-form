@@ -19,7 +19,7 @@ st.set_page_config(page_title="Moellim Course Page Review", layout="wide")
 # ==========================================
 # CONFIGURATION: SUBMISSION DEADLINE
 # ==========================================
-SUBMISSION_DEADLINE = datetime(2026, 10, 26, 11, 59, 59)
+SUBMISSION_DEADLINE = datetime(2026, 10, 26, 23, 59, 59)
 
 # Sidebar Role Selector
 st.sidebar.title("Navigation")
