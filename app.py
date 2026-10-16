@@ -24,7 +24,7 @@ def show_submission_popup(course, tracking_token, timestamp_str):
     st.write(f"**Course:** {course}")
     st.write(f"**Tracking Token:** `{tracking_token}`")
     st.write(f"**Submitted On:** {timestamp_str}")
-    st.info("You can use your registered email anytime under the 'Track Submission Status' tab to view review comments.")
+    st.info("You can enter your registered email under 'Track Submission Status' to view reviews and comments.")
     if st.button("Close Window"):
         st.rerun()
 
@@ -53,16 +53,15 @@ if role == "Instructor Portal":
                 elif pdf.size > 25 * 1024 * 1024:
                     st.error("File size exceeds 25MB limit.")
                 else:
-                    # Clean strings for folder paths
+                    # Folder-safe naming
                     clean_instructor = "".join(c if c.isalnum() else "_" for c in instructor.strip())
                     clean_course = "".join(c if c.isalnum() else "_" for c in course.strip())
                     
-                    # Generate unique submission token and folder path
                     timestamp_int = int(time.time())
                     tracking_token = f"QEC-{timestamp_int}"
                     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
-                    # Store in dynamic folders: instructor_name/course_name/file.pdf
+                    # Store inside dynamic subfolders
                     file_path = f"{clean_instructor}/{clean_course}/{timestamp_int}_submission.pdf"
                     
                     file_bytes = pdf.read()
@@ -89,10 +88,10 @@ if role == "Instructor Portal":
                     # Trigger Pop-up
                     show_submission_popup(course, tracking_token, timestamp_str)
 
-    # --- TRACK STATUS TAB ---
+    # --- TRACK STATUS TAB (GROUPED BY EMAIL) ---
     with tab_track:
-        st.header("Track Your Submission Status")
-        search_email = st.text_input("Enter your registered email to view feedback:")
+        st.header("Track Submission Status")
+        search_email = st.text_input("Enter your registered email address:")
         
         if search_email:
             clean_email = search_email.strip().lower()
@@ -100,39 +99,46 @@ if role == "Instructor Portal":
             data = response.data
             
             if data:
-                st.write(f"Found **{len(data)}** submission(s) for `{clean_email}`:")
+                instructor_name = data[0].get("instructor_name", "Instructor")
                 
-                # Group submissions by Course Title
-                courses_dict = {}
+                # Top Email Container Header
+                st.markdown(f"### 👤 Profile: `{clean_email}`")
+                st.caption(f"Showing **{len(data)}** total submission(s) for **{instructor_name}**")
+                st.divider()
+
+                # Group Submissions by Course Code/Title
+                course_groups = {}
                 for item in data:
                     c_title = item.get("course_title", "Uncategorized Course")
-                    courses_dict.setdefault(c_title, []).append(item)
-                
-                # Render Categorized Accordions
-                for c_title, submissions in courses_dict.items():
-                    st.subheader(f"📚 {c_title}")
-                    for item in submissions:
-                        status = item.get("status", "Pending Review")
-                        
-                        # Status indicator badges
-                        status_badge = "⏳ Pending"
-                        if status == "Approved":
-                            status_badge = "✅ Approved"
-                        elif status == "Changes Requested":
-                            status_badge = "⚠️ Changes Requested"
-                        elif status == "Rejected":
-                            status_badge = "❌ Rejected"
+                    course_groups.setdefault(c_title, []).append(item)
 
-                        with st.expander(f"Submission ID: #{item['id']} — Status: {status_badge}"):
-                            st.write(f"**Instructor:** {item['instructor_name']}")
-                            st.write(f"**Submitted Date:** {item['created_at'][:10]}")
+                # Render Grouped Cards
+                for c_title, submissions in course_groups.items():
+                    st.subheader(f"📖 {c_title}")
+                    
+                    for sub in submissions:
+                        status = sub.get("status", "Pending Review")
+                        
+                        # Status badges
+                        if status == "Approved":
+                            badge = "✅ Approved"
+                        elif status == "Changes Requested":
+                            badge = "⚠️ Changes Requested"
+                        elif status == "Rejected":
+                            badge = "❌ Rejected"
+                        else:
+                            badge = "⏳ Pending Review"
+
+                        with st.expander(f"Submission #{sub['id']} — {badge}"):
+                            st.write(f"**Submitted Date:** {sub['created_at'][:10]}")
                             st.write(f"**Current Status:** {status}")
-                            st.write(f"**Reviewer Comments / Feedback:** {item['feedback']}")
-                            if item.get('pdf_url'):
-                                st.markdown(f"[📄 Download Submitted PDF]({item['pdf_url']})")
-                    st.divider()
+                            st.write(f"**Reviewer Feedback:** {sub['feedback']}")
+                            if sub.get('pdf_url'):
+                                st.markdown(f"[📄 View/Download Uploaded PDF]({sub['pdf_url']})")
+                    
+                    st.write("") # Spacing
             else:
-                st.info("No submissions found under this email address.")
+                st.info("No course submissions found associated with this email address.")
 
 # ==========================================
 # 2. EVALUATOR / ADMIN PORTAL (PROTECTED)
@@ -159,7 +165,6 @@ elif role == "Evaluator (Admin) Portal":
 
         st.subheader("Manage & Grade Submissions")
 
-        # Categorized Status Tabs for Evaluators
         tab_pending, tab_approved, tab_changes, tab_rejected = st.tabs([
             "⏳ Pending Review", "✅ Approved", "⚠️ Changes Requested", "❌ Rejected"
         ])
@@ -172,8 +177,8 @@ elif role == "Evaluator (Admin) Portal":
 
             if rows:
                 for row in rows:
-                    with st.expander(f"Review: {row['course_title']} — Instructor: {row['instructor_name']}"):
-                        st.write(f"**Email:** {row['email']}")
+                    with st.expander(f"Review: {row['course_title']} — Instructor: {row['instructor_name']} ({row['email']})"):
+                        st.write(f"**Instructor Email:** {row['email']}")
                         st.write(f"**Submitted Date:** {row['created_at'][:10]}")
                         st.markdown(f"[📄 Download/View Uploaded Document]({row['pdf_url']})")
 
