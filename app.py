@@ -101,7 +101,6 @@ if role == "Instructor Portal":
             if data:
                 instructor_name = data[0].get("instructor_name", "Instructor")
                 
-                # Top Email Container Header
                 st.markdown(f"### 👤 Profile: `{clean_email}`")
                 st.caption(f"Showing **{len(data)}** total submission(s) for **{instructor_name}**")
                 st.divider()
@@ -119,7 +118,6 @@ if role == "Instructor Portal":
                     for sub in submissions:
                         status = sub.get("status", "Pending Review")
                         
-                        # Status badges
                         if status == "Approved":
                             badge = "✅ Approved"
                         elif status == "Changes Requested":
@@ -136,12 +134,12 @@ if role == "Instructor Portal":
                             if sub.get('pdf_url'):
                                 st.markdown(f"[📄 View/Download Uploaded PDF]({sub['pdf_url']})")
                     
-                    st.write("") # Spacing
+                    st.write("") 
             else:
                 st.info("No course submissions found associated with this email address.")
 
 # ==========================================
-# 2. EVALUATOR / ADMIN PORTAL (PROTECTED)
+# 2. EVALUATOR / ADMIN PORTAL (PROTECTED - EMAIL GROUPED)
 # ==========================================
 elif role == "Evaluator (Admin) Portal":
     st.title("QEC Evaluator Portal")
@@ -163,29 +161,39 @@ elif role == "Evaluator (Admin) Portal":
             st.session_state.authenticated = False
             st.rerun()
 
-        st.subheader("Manage & Grade Submissions")
+        st.subheader("Manage & Grade Submissions (Grouped by Email)")
 
-        tab_pending, tab_approved, tab_changes, tab_rejected = st.tabs([
-            "⏳ Pending Review", "✅ Approved", "⚠️ Changes Requested", "❌ Rejected"
-        ])
+        # Fetch all submissions ordered by newest first
+        res = supabase.table("submissions").select("*").order("created_at", desc=True).execute()
+        rows = res.data
 
-        status_options = ["Pending Review", "Approved", "Changes Requested", "Rejected"]
+        if rows:
+            # Group submissions strictly by Email
+            email_groups = {}
+            for row in rows:
+                instructor_email = row.get("email", "no-email@provided.com").strip().lower()
+                email_groups.setdefault(instructor_email, []).append(row)
 
-        def render_evaluator_view(status_filter):
-            res = supabase.table("submissions").select("*").eq("status", status_filter).order("created_at", desc=True).execute()
-            rows = res.data
+            st.write(f"Total Active Instructors: **{len(email_groups)}** | Total Submissions: **{len(rows)}**")
+            st.divider()
 
-            if rows:
-                for row in rows:
-                    with st.expander(f"Review: {row['course_title']} — Instructor: {row['instructor_name']} ({row['email']})"):
-                        st.write(f"**Instructor Email:** {row['email']}")
+            status_options = ["Pending Review", "Approved", "Changes Requested", "Rejected"]
+
+            # Loop through each instructor email group
+            for email_addr, submissions in email_groups.items():
+                instructor_name = submissions[0].get("instructor_name", "Instructor")
+                
+                with st.expander(f"📧 {email_addr} — ({instructor_name}) | [{len(submissions)} Submission(s)]"):
+                    for row in submissions:
+                        st.markdown(f"#### 📖 Course: `{row['course_title']}`")
                         st.write(f"**Submitted Date:** {row['created_at'][:10]}")
-                        st.markdown(f"[📄 Download/View Uploaded Document]({row['pdf_url']})")
+                        st.write(f"**Current Status:** `{row.get('status', 'Pending Review')}`")
+                        st.markdown(f"[📄 Download/View PDF]({row['pdf_url']})")
 
                         current_status = row.get("status", "Pending Review")
                         default_index = status_options.index(current_status) if current_status in status_options else 0
 
-                        with st.form(f"review_form_{row['id']}"):
+                        with st.form(f"eval_form_{row['id']}"):
                             new_status = st.selectbox("Update Status", status_options, index=default_index)
                             new_feedback = st.text_area("Review Comments / Feedback", value=row.get("feedback", ""))
                             
@@ -203,14 +211,6 @@ elif role == "Evaluator (Admin) Portal":
                                     supabase.table("submissions").delete().eq("id", row["id"]).execute()
                                     st.warning("Submission deleted.")
                                     st.rerun()
-            else:
-                st.info(f"No submissions found under '{status_filter}'.")
-
-        with tab_pending:
-            render_evaluator_view("Pending Review")
-        with tab_approved:
-            render_evaluator_view("Approved")
-        with tab_changes:
-            render_evaluator_view("Changes Requested")
-        with tab_rejected:
-            render_evaluator_view("Rejected")
+                        st.markdown("---")
+        else:
+            st.info("No course page submissions found in database.")
