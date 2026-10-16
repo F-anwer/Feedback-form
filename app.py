@@ -17,14 +17,12 @@ st.set_page_config(page_title="Moellim Course Page Review", layout="wide")
 # ==========================================
 # CONFIGURATION: SUBMISSION DEADLINE
 # ==========================================
-# Set your desired deadline here (Format: YYYY-MM-DD HH:MM:SS)
 SUBMISSION_DEADLINE = datetime(2026, 11, 1, 23, 59, 59)
 
 # Sidebar Role Selector
 st.sidebar.title("Navigation")
 role = st.sidebar.radio("Select View:", ["Instructor Portal", "Evaluator (Admin) Portal"])
 
-# Deadline Countdown / Notice in Sidebar
 now = datetime.now()
 is_deadline_passed = now > SUBMISSION_DEADLINE
 
@@ -49,14 +47,13 @@ def show_submission_popup(course, tracking_token, timestamp_str):
         st.rerun()
 
 
-# Function to generate Excel Summary Report using pandas/openpyxl
+# Function to generate Excel Summary Report
 def generate_excel_report(data):
     if not data:
         return None
     
     df = pd.DataFrame(data)
     
-    # Rename and clean columns for export
     export_df = pd.DataFrame({
         "Submission ID": df.get("id", ""),
         "Instructor Name": df.get("instructor_name", ""),
@@ -87,7 +84,6 @@ if role == "Instructor Portal":
     with tab_submit:
         st.header("Submit Course Page for QEC Review")
         
-        # DEADLINE CHECK
         if is_deadline_passed:
             st.error(f"🔒 The submission portal closed on **{SUBMISSION_DEADLINE.strftime('%B %d, %Y at %I:%M %p')}**. New uploads are no longer accepted.")
             st.info("If you require an extension, please contact the QEC administration team.")
@@ -134,7 +130,7 @@ if role == "Instructor Portal":
                         supabase.table("submissions").insert(record).execute()
                         show_submission_popup(course, tracking_token, timestamp_str)
 
-    # --- TRACK STATUS TAB (GROUPED BY EMAIL) ---
+    # --- TRACK STATUS TAB ---
     with tab_track:
         st.header("Track Submission Status")
         search_email = st.text_input("Enter your registered email address:")
@@ -206,11 +202,9 @@ elif role == "Evaluator (Admin) Portal":
 
         st.subheader("Manage & Grade Submissions")
 
-        # Fetch all submissions
         res = supabase.table("submissions").select("*").order("created_at", desc=True).execute()
         rows = res.data
 
-        # --- EXCEL REPORT GENERATION BUTTON ---
         col_title, col_export = st.columns([3, 1])
         with col_export:
             if rows:
@@ -223,7 +217,6 @@ elif role == "Evaluator (Admin) Portal":
                 )
 
         if rows:
-            # Group submissions by Email
             email_groups = {}
             for row in rows:
                 instructor_email = row.get("email", "no-email@provided.com").strip().lower()
@@ -247,24 +240,26 @@ elif role == "Evaluator (Admin) Portal":
                         current_status = row.get("status", "Pending Review")
                         default_index = status_options.index(current_status) if current_status in status_options else 0
 
+                        # Form strictly for saving status and feedback
                         with st.form(f"eval_form_{row['id']}"):
                             new_status = st.selectbox("Update Status", status_options, index=default_index)
                             new_feedback = st.text_area("Review Comments / Feedback", value=row.get("feedback", ""))
                             
-                            col1, col2 = st.columns([1, 1])
-                            with col1:
-                                if st.form_submit_button("Save & Update"):
-                                    supabase.table("submissions").update({
-                                        "status": new_status,
-                                        "feedback": new_feedback
-                                    }).eq("id", row["id"]).execute()
-                                    st.success(f"Updated status for {row['course_title']}!")
-                                    st.rerun()
-                            with col2:
-                                if st.form_submit_button("🗑️ Delete Record"):
-                                    supabase.table("submissions").delete().eq("id", row["id"]).execute()
-                                    st.warning("Submission deleted.")
-                                    st.rerun()
+                            saved = st.form_submit_button("Save & Update")
+                            if saved:
+                                supabase.table("submissions").update({
+                                    "status": new_status,
+                                    "feedback": new_feedback
+                                }).eq("id", row["id"]).execute()
+                                st.success(f"Updated status for {row['course_title']}!")
+                                st.rerun()
+
+                        # Standalone Delete Button outside the form
+                        if st.button(f"🗑️ Delete Submission #{row['id']}", key=f"del_btn_{row['id']}"):
+                            supabase.table("submissions").delete().eq("id", row["id"]).execute()
+                            st.success(f"Successfully deleted submission #{row['id']}!")
+                            st.rerun()
+
                         st.markdown("---")
         else:
             st.info("No course page submissions found in database.")
