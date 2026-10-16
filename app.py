@@ -1,5 +1,6 @@
 import streamlit as st
 import time
+from datetime import datetime
 from supabase import create_client, Client
 
 # Initialize Supabase Client
@@ -14,6 +15,19 @@ st.set_page_config(page_title="Moellim Course Page Review", layout="wide")
 # Sidebar Role Selector
 st.sidebar.title("Navigation")
 role = st.sidebar.radio("Select View:", ["Instructor Portal", "Evaluator (Admin) Portal"])
+
+
+# Dialog Pop-up for Submission Confirmation
+@st.dialog("🎉 Submission Received!")
+def show_submission_popup(course, tracking_token, timestamp_str):
+    st.success("Your course page PDF has been successfully uploaded for QEC review.")
+    st.write(f"**Course:** {course}")
+    st.write(f"**Tracking Token:** `{tracking_token}`")
+    st.write(f"**Submitted On:** {timestamp_str}")
+    st.info("You can use your registered email anytime under the 'Track Submission Status' tab to view review comments.")
+    if st.button("Close Window"):
+        st.rerun()
+
 
 # ==========================================
 # 1. INSTRUCTOR PORTAL (PUBLIC)
@@ -39,31 +53,41 @@ if role == "Instructor Portal":
                 elif pdf.size > 25 * 1024 * 1024:
                     st.error("File size exceeds 25MB limit.")
                 else:
-                    timestamp = int(time.time())
-                    clean_course = "".join(c if c.isalnum() else "_" for c in course)
-                    clean_name = f"{timestamp}_{clean_course}.pdf"
+                    # Clean strings for folder paths
+                    clean_instructor = "".join(c if c.isalnum() else "_" for c in instructor.strip())
+                    clean_course = "".join(c if c.isalnum() else "_" for c in course.strip())
+                    
+                    # Generate unique submission token and folder path
+                    timestamp_int = int(time.time())
+                    tracking_token = f"QEC-{timestamp_int}"
+                    timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    # Store in dynamic folders: instructor_name/course_name/file.pdf
+                    file_path = f"{clean_instructor}/{clean_course}/{timestamp_int}_submission.pdf"
                     
                     file_bytes = pdf.read()
                     
                     # Upload to Supabase Storage Bucket
                     supabase.storage.from_("moellim-pdfs").upload(
-                        clean_name, 
+                        file_path, 
                         file_bytes, 
                         {"content-type": "application/pdf", "upsert": "true"}
                     )
                     
-                    public_url = supabase.storage.from_("moellim-pdfs").get_public_url(clean_name)
+                    public_url = supabase.storage.from_("moellim-pdfs").get_public_url(file_path)
 
                     record = {
-                        "course_title": course,
-                        "instructor_name": instructor,
-                        "email": email,
+                        "course_title": course.strip(),
+                        "instructor_name": instructor.strip(),
+                        "email": email.strip().lower(),
                         "pdf_url": public_url,
                         "status": "Pending Review",
                         "feedback": "Awaiting initial review"
                     }
                     supabase.table("submissions").insert(record).execute()
-                    st.success(f"Successfully submitted feedback form for {course}!")
+                    
+                    # Trigger Pop-up
+                    show_submission_popup(course, tracking_token, timestamp_str)
 
     # --- TRACK STATUS TAB ---
     with tab_track:
@@ -71,29 +95,52 @@ if role == "Instructor Portal":
         search_email = st.text_input("Enter your registered email to view feedback:")
         
         if search_email:
-            response = supabase.table("submissions").select("*").eq("email", search_email.strip()).execute()
+            clean_email = search_email.strip().lower()
+            response = supabase.table("submissions").select("*").eq("email", clean_email).order("created_at", desc=True).execute()
             data = response.data
             
             if data:
-                st.write(f"Found **{len(data)}** submission(s) for `{search_email}`:")
+                st.write(f"Found **{len(data)}** submission(s) for `{clean_email}`:")
+                
+                # Group submissions by Course Title
+                courses_dict = {}
                 for item in data:
-                    with st.expander(f"📚 {item['course_title']} — Status: **{item['status']}**"):
-                        st.write(f"**Submitted Date:** {item['created_at'][:10]}")
-                        st.write(f"**Feedback / Comments:** {item['feedback']}")
-                        if item.get('pdf_url'):
-                            st.markdown(f"[📄 View Uploaded Document]({item['pdf_url']})")
+                    c_title = item.get("course_title", "Uncategorized Course")
+                    courses_dict.setdefault(c_title, []).append(item)
+                
+                # Render Categorized Accordions
+                for c_title, submissions in courses_dict.items():
+                    st.subheader(f"📚 {c_title}")
+                    for item in submissions:
+                        status = item.get("status", "Pending Review")
+                        
+                        # Status indicator badges
+                        status_badge = "⏳ Pending"
+                        if status == "Approved":
+                            status_badge = "✅ Approved"
+                        elif status == "Changes Requested":
+                            status_badge = "⚠️ Changes Requested"
+                        elif status == "Rejected":
+                            status_badge = "❌ Rejected"
+
+                        with st.expander(f"Submission ID: #{item['id']} — Status: {status_badge}"):
+                            st.write(f"**Instructor:** {item['instructor_name']}")
+                            st.write(f"**Submitted Date:** {item['created_at'][:10]}")
+                            st.write(f"**Current Status:** {status}")
+                            st.write(f"**Reviewer Comments / Feedback:** {item['feedback']}")
+                            if item.get('pdf_url'):
+                                st.markdown(f"[📄 Download Submitted PDF]({item['pdf_url']})")
+                    st.divider()
             else:
                 st.info("No submissions found under this email address.")
 
 # ==========================================
 # 2. EVALUATOR / ADMIN PORTAL (PROTECTED)
 # ==========================================
-# ==========================================
-# 2. EVALUATOR / ADMIN PORTAL (PROTECTED)
-# ==========================================
 elif role == "Evaluator (Admin) Portal":
     st.title("QEC Evaluator Portal")
 
+    # Password Authentication Gate
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
 
@@ -112,23 +159,23 @@ elif role == "Evaluator (Admin) Portal":
 
         st.subheader("Manage & Grade Submissions")
 
-        # Categorized Tabs
+        # Categorized Status Tabs for Evaluators
         tab_pending, tab_approved, tab_changes, tab_rejected = st.tabs([
             "⏳ Pending Review", "✅ Approved", "⚠️ Changes Requested", "❌ Rejected"
         ])
 
         status_options = ["Pending Review", "Approved", "Changes Requested", "Rejected"]
 
-        def render_submissions(status_filter):
+        def render_evaluator_view(status_filter):
             res = supabase.table("submissions").select("*").eq("status", status_filter).order("created_at", desc=True).execute()
             rows = res.data
 
             if rows:
                 for row in rows:
-                    with st.expander(f"Review: {row['course_title']} (Instructor: {row['instructor_name']})"):
+                    with st.expander(f"Review: {row['course_title']} — Instructor: {row['instructor_name']}"):
                         st.write(f"**Email:** {row['email']}")
                         st.write(f"**Submitted Date:** {row['created_at'][:10]}")
-                        st.markdown(f"[📄 Download/View PDF]({row['pdf_url']})")
+                        st.markdown(f"[📄 Download/View Uploaded Document]({row['pdf_url']})")
 
                         current_status = row.get("status", "Pending Review")
                         default_index = status_options.index(current_status) if current_status in status_options else 0
@@ -155,10 +202,10 @@ elif role == "Evaluator (Admin) Portal":
                 st.info(f"No submissions found under '{status_filter}'.")
 
         with tab_pending:
-            render_submissions("Pending Review")
+            render_evaluator_view("Pending Review")
         with tab_approved:
-            render_submissions("Approved")
+            render_evaluator_view("Approved")
         with tab_changes:
-            render_submissions("Needs Revisions")
+            render_evaluator_view("Changes Requested")
         with tab_rejected:
-            render_submissions("Rejected")
+            render_evaluator_view("Rejected")
