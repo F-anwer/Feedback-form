@@ -19,7 +19,7 @@ st.set_page_config(page_title="Moellim Course Page Review", layout="wide")
 # ==========================================
 # CONFIGURATION: SUBMISSION DEADLINE
 # ==========================================
-SUBMISSION_DEADLINE = datetime(2026, 10, 16, 7, 40, 59)
+SUBMISSION_DEADLINE = datetime(2026, 10, 26, 11, 59, 59)
 
 # Sidebar Role Selector
 st.sidebar.title("Navigation")
@@ -164,7 +164,7 @@ if role == "Instructor Portal":
 
     # --- SUBMIT TAB ---
     with tab_submit:
-        st.header("Submit Course Page for QEC Review")
+        st.header("Submit Course Page for Review")
         
         if is_deadline_passed:
             st.error(f"🔒 The submission portal closed on **{SUBMISSION_DEADLINE.strftime('%B %d, %Y at %I:%M %p')}**. New uploads are no longer accepted.")
