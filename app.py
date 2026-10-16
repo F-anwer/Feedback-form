@@ -4,6 +4,8 @@ import io
 import pandas as pd
 from datetime import datetime
 from supabase import create_client, Client
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 # Initialize Supabase Client
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
@@ -47,7 +49,7 @@ def show_submission_popup(course, tracking_token, timestamp_str):
         st.rerun()
 
 
-# Function to generate Excel Summary Report
+# Function to generate Professionally Formatted & Color-Coded Excel Summary Report
 def generate_excel_report(data):
     if not data:
         return None
@@ -60,7 +62,7 @@ def generate_excel_report(data):
         "Instructor Email": df.get("email", ""),
         "Course Title & Code": df.get("course_title", ""),
         "Submission Status": df.get("status", "Pending Review"),
-        "Submitted At": df.get("created_at", "").apply(lambda x: str(x)[:10] if x else ""),
+        "Submitted At": df.get("created_at", "").apply(lambda x: str(x)[:10] if str(x) != "nan" and x else ""),
         "Reviewer Feedback": df.get("feedback", ""),
         "PDF Document Link": df.get("pdf_url", "")
     })
@@ -68,7 +70,87 @@ def generate_excel_report(data):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         export_df.to_excel(writer, index=False, sheet_name="QEC Submissions Summary")
-    
+        workbook = writer.book
+        worksheet = writer.sheets["QEC Submissions Summary"]
+
+        # --- STYLES DEFINITION ---
+        header_fill = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        
+        row_alt_fill = PatternFill(start_color="F2F5F9", end_color="F2F5F9", fill_type="solid")
+        row_white_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+        
+        # Status Color Fills & Fonts
+        status_styles = {
+            "Approved": {
+                "fill": PatternFill(start_color="D4EDDA", end_color="D4EDDA", fill_type="solid"),
+                "font": Font(name="Calibri", size=11, bold=True, color="155724")
+            },
+            "Changes Requested": {
+                "fill": PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid"),
+                "font": Font(name="Calibri", size=11, bold=True, color="856404")
+            },
+            "Pending Review": {
+                "fill": PatternFill(start_color="CCE5FF", end_color="CCE5FF", fill_type="solid"),
+                "font": Font(name="Calibri", size=11, bold=True, color="004085")
+            },
+            "Rejected": {
+                "fill": PatternFill(start_color="F8D7DA", end_color="F8D7DA", fill_type="solid"),
+                "font": Font(name="Calibri", size=11, bold=True, color="721C24")
+            }
+        }
+
+        thin_border = Border(
+            left=Side(style='thin', color='D9D9D9'),
+            right=Side(style='thin', color='D9D9D9'),
+            top=Side(style='thin', color='D9D9D9'),
+            bottom=Side(style='thin', color='D9D9D9')
+        )
+
+        align_center = Alignment(horizontal="center", vertical="center")
+        align_left = Alignment(horizontal="left", vertical="center")
+
+        # --- APPLY HEADER STYLES ---
+        for col_num, col_name in enumerate(export_df.columns, 1):
+            cell = worksheet.cell(row=1, column=col_num)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = align_center
+            worksheet.row_dimensions[1].height = 25
+
+        # --- APPLY DATA ROW STYLES ---
+        status_col_idx = export_df.columns.get_loc("Submission Status") + 1
+
+        for row_num in range(2, len(export_df) + 2):
+            worksheet.row_dimensions[row_num].height = 22
+            is_even = row_num % 2 == 0
+            base_fill = row_alt_fill if is_even else row_white_fill
+
+            for col_num in range(1, len(export_df.columns) + 1):
+                cell = worksheet.cell(row=row_num, column=col_num)
+                cell.border = thin_border
+                cell.alignment = align_left
+                cell.font = Font(name="Calibri", size=10)
+                cell.fill = base_fill
+
+                # Color Code the "Submission Status" column
+                if col_num == status_col_idx:
+                    status_val = str(cell.value)
+                    style_cfg = status_styles.get(status_val, status_styles["Pending Review"])
+                    cell.fill = style_cfg["fill"]
+                    cell.font = style_cfg["font"]
+                    cell.alignment = align_center
+
+        # --- AUTO-FIT COLUMN WIDTHS ---
+        for col in worksheet.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                val_str = str(cell.value or '')
+                if len(val_str) > max_len:
+                    max_len = len(val_str)
+            worksheet.column_dimensions[col_letter].width = min(max(max_len + 4, 12), 50)
+
     return output.getvalue()
 
 
@@ -210,7 +292,7 @@ elif role == "Evaluator (Admin) Portal":
             if rows:
                 excel_bytes = generate_excel_report(rows)
                 st.download_button(
-                    label="📊 Export Summary Excel Sheet",
+                    label="📊 Export Formatted Excel Sheet",
                     data=excel_bytes,
                     file_name=f"QEC_Submissions_Report_{datetime.now().strftime('%Y%m%d')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -240,7 +322,6 @@ elif role == "Evaluator (Admin) Portal":
                         current_status = row.get("status", "Pending Review")
                         default_index = status_options.index(current_status) if current_status in status_options else 0
 
-                        # Form strictly for saving status and feedback
                         with st.form(f"eval_form_{row['id']}"):
                             new_status = st.selectbox("Update Status", status_options, index=default_index)
                             new_feedback = st.text_area("Review Comments / Feedback", value=row.get("feedback", ""))
@@ -254,7 +335,6 @@ elif role == "Evaluator (Admin) Portal":
                                 st.success(f"Updated status for {row['course_title']}!")
                                 st.rerun()
 
-                        # Standalone Delete Button outside the form
                         if st.button(f"🗑️ Delete Submission #{row['id']}", key=f"del_btn_{row['id']}"):
                             supabase.table("submissions").delete().eq("id", row["id"]).execute()
                             st.success(f"Successfully deleted submission #{row['id']}!")
