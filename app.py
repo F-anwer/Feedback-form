@@ -88,10 +88,12 @@ if role == "Instructor Portal":
 # ==========================================
 # 2. EVALUATOR / ADMIN PORTAL (PROTECTED)
 # ==========================================
+# ==========================================
+# 2. EVALUATOR / ADMIN PORTAL (PROTECTED)
+# ==========================================
 elif role == "Evaluator (Admin) Portal":
     st.title("QEC Evaluator Portal")
 
-    # Simple Password Gate
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
 
@@ -109,33 +111,54 @@ elif role == "Evaluator (Admin) Portal":
             st.rerun()
 
         st.subheader("Manage & Grade Submissions")
-        
-        # Retrieve all submissions
-        res = supabase.table("submissions").select("*").order("created_at", desc=True).execute()
-        rows = res.data
 
-        if rows:
-            for row in rows:
-                with st.expander(f"Review: {row['course_title']} (Instructor: {row['instructor_name']})"):
-                    st.write(f"**Email:** {row['email']}")
-                    st.write(f"**Current Status:** {row['status']}")
-                    st.markdown(f"[📄 Download/View PDF]({row['pdf_url']})")
+        # Categorized Tabs
+        tab_pending, tab_approved, tab_changes, tab_rejected = st.tabs([
+            "⏳ Pending Review", "✅ Approved", "⚠️ Changes Requested", "❌ Rejected"
+        ])
 
-                    with st.form(f"review_form_{row['id']}"):
-                        new_status = st.selectbox(
-                            "Update Status", 
-                            ["Pending Review", "Approved", "Changes Requested", "Rejected"],
-                            index=["Pending Review", "Approved", "Changes Requested", "Rejected"].index(row.get("status", "Pending Review"))
-                        )
-                        new_feedback = st.text_area("Review Comments / Feedback", value=row.get("feedback", ""))
-                        
-                        if st.form_submit_button("Save & Send Review"):
-                            supabase.table("submissions").update({
-                                "status": new_status,
-                                "feedback": new_feedback
-                            }).eq("id", row["id"]).execute()
+        status_options = ["Pending Review", "Approved", "Changes Requested", "Rejected"]
+
+        def render_submissions(status_filter):
+            res = supabase.table("submissions").select("*").eq("status", status_filter).order("created_at", desc=True).execute()
+            rows = res.data
+
+            if rows:
+                for row in rows:
+                    with st.expander(f"Review: {row['course_title']} (Instructor: {row['instructor_name']})"):
+                        st.write(f"**Email:** {row['email']}")
+                        st.write(f"**Submitted Date:** {row['created_at'][:10]}")
+                        st.markdown(f"[📄 Download/View PDF]({row['pdf_url']})")
+
+                        current_status = row.get("status", "Pending Review")
+                        default_index = status_options.index(current_status) if current_status in status_options else 0
+
+                        with st.form(f"review_form_{row['id']}"):
+                            new_status = st.selectbox("Update Status", status_options, index=default_index)
+                            new_feedback = st.text_area("Review Comments / Feedback", value=row.get("feedback", ""))
                             
-                            st.success(f"Updated status for {row['course_title']}!")
-                            st.rerun()
-        else:
-            st.info("No course page submissions found.")
+                            col1, col2 = st.columns([1, 1])
+                            with col1:
+                                if st.form_submit_button("Save & Update"):
+                                    supabase.table("submissions").update({
+                                        "status": new_status,
+                                        "feedback": new_feedback
+                                    }).eq("id", row["id"]).execute()
+                                    st.success(f"Updated status for {row['course_title']}!")
+                                    st.rerun()
+                            with col2:
+                                if st.form_submit_button("🗑️ Delete Record"):
+                                    supabase.table("submissions").delete().eq("id", row["id"]).execute()
+                                    st.warning("Submission deleted.")
+                                    st.rerun()
+            else:
+                st.info(f"No submissions found under '{status_filter}'.")
+
+        with tab_pending:
+            render_submissions("Pending Review")
+        with tab_approved:
+            render_submissions("Approved")
+        with tab_changes:
+            render_submissions("Needs Revisions")
+        with tab_rejected:
+            render_submissions("Rejected")
