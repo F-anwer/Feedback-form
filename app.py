@@ -1,134 +1,141 @@
 import streamlit as st
-import pandas as pd
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from supabase import create_client
 import time
+from supabase import create_client, Client
 
-# Load secrets
+# Initialize Supabase Client
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+ADMIN_PASSWORD = st.secrets["ADMIN_PASSWORD"]
 
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
-SENDER_EMAIL = st.secrets["SMTP_EMAIL"]
-SENDER_PASSWORD = st.secrets["SMTP_PASSWORD"]
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def send_review_email(recipient_email, instructor_name, course_title, status, feedback):
-    try:
-        msg = MIMEMultipart()
-        msg["From"] = SENDER_EMAIL
-        msg["To"] = recipient_email
-        msg["Subject"] = f"Moellim Review Outcome: {course_title} - {status}"
+st.set_page_config(page_title="Moellim Course Page Review", layout="wide")
 
-        instructions = ""
-        if status == "Needs revision":
-            instructions = "Please revise the missing items according to the checklist and re-upload your page."
-        elif status == "Approved with changes":
-            instructions = "Please make the minor updates noted on your Moellim page."
-        else:
-            instructions = "Your course page meets all checklist requirements. No further action is required."
+# Sidebar Role Selector
+st.sidebar.title("Navigation")
+role = st.sidebar.radio("Select View:", ["Instructor Portal", "Evaluator (Admin) Portal"])
 
-        body = f"Dear {instructor_name},\n\nYour Moellim course page review for {course_title} has been completed.\n\nStatus: {status}\n\nReviewer Feedback:\n{feedback}\n\nNext Steps:\n{instructions}\n\nBest regards,\nReview Committee"
-        msg.attach(MIMEText(body, "plain"))
-
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.starttls()
-        server.login(SENDER_EMAIL, SENDER_PASSWORD)
-        server.sendmail(SENDER_EMAIL, recipient_email, msg.as_string())
-        server.quit()
-        return True, "Email sent successfully!"
-    except Exception as e:
-        return False, str(e)
-
-def get_submissions():
-    response = supabase.table("submissions").select("*").execute()
-    return pd.DataFrame(response.data)
-
-st.set_page_config(page_title="Moellim Course Review", layout="wide")
-tab_submit, tab_review = st.tabs(["Submit Course Page", "Reviewer Portal (Admin)"])
-
-with tab_submit:
-    st.header("Moellim Course Page Submission")
-    with st.form("faculty_submission", clear_on_submit=True):
-        course = st.text_input("Course Title & Code *")
-        instructor = st.text_input("Instructor Name *")
-        email = st.text_input("Instructor Email *")
-        pdf = st.file_uploader("Upload Moellim Page PDF *", type=["pdf"])
-
-        submitted = st.form_submit_button("Submit")
-        if submitted:
-            if not course or not instructor or not email or not pdf:
-                st.error("Please fill in all fields and attach the PDF.")
-            # --- GUARDRAIL: FILE SIZE CHECK (15MB Limit) ---
-            elif pdf.size > 15 * 1024 * 1024:
-                st.error("File size exceeds 15MB. Please upload a smaller file.")
-            else:
-                # --- ENHANCEMENT: TIMESTAMPED UNIQUE FILENAME ---
-                timestamp = int(time.time())
-                clean_course = "".join(c if c.isalnum() else "_" for c in course)
-                clean_instructor = "".join(c if c.isalnum() else "_" for c in instructor)
-                clean_name = f"{timestamp}_{clean_course}_{clean_instructor}.pdf"
-                
-                file_bytes = pdf.read()
-                
-                # Upload to Supabase Bucket with upsert enabled
-                supabase.storage.from_("moellim-pdfs").upload(
-                    clean_name, 
-                    file_bytes, 
-                    {"content-type": "application/pdf", "upsert": "true"}
-                )
-                
-                public_url = supabase.storage.from_("moellim-pdfs").get_public_url(clean_name)
-
-                record = {
-                    "course_title": course,
-                    "instructor_name": instructor,
-                    "email": email,
-                    "pdf_url": public_url,
-                    "status": "Pending Review",
-                    "feedback": "Awaiting initial review"
-                }
-                supabase.table("submissions").insert(record).execute()
-                st.success(f"Successfully submitted for {course}!")
-
-# --- TAB 2: REVIEWER PORTAL ---
-with tab_review:
-    st.header("Reviewer Portal")
-    admin_pw = st.text_input("Enter Reviewer Password", type="password")
+# ==========================================
+# 1. INSTRUCTOR PORTAL (PUBLIC)
+# ==========================================
+if role == "Instructor Portal":
+    st.title("Moellim Course Page Portal")
     
-    if admin_pw == st.secrets.get("ADMIN_PASSWORD", "admin123"):
-        df = get_submissions()
-        if df.empty:
-            st.info("No submissions yet.")
+    tab_submit, tab_track = st.tabs(["Submit Course Page", "Track Submission Status"])
+
+    # --- SUBMIT TAB ---
+    with tab_submit:
+        st.header("Submit Course Page for QEC Review")
+        with st.form("faculty_submission", clear_on_submit=True):
+            course = st.text_input("Course Title & Code *")
+            instructor = st.text_input("Instructor Name *")
+            email = st.text_input("Instructor Email *")
+            pdf = st.file_uploader("Upload Moellim Page PDF *", type=["pdf"])
+
+            submitted = st.form_submit_button("Submit")
+            if submitted:
+                if not course or not instructor or not email or not pdf:
+                    st.error("Please fill in all required fields and upload your PDF.")
+                elif pdf.size > 25 * 1024 * 1024:
+                    st.error("File size exceeds 25MB limit.")
+                else:
+                    timestamp = int(time.time())
+                    clean_course = "".join(c if c.isalnum() else "_" for c in course)
+                    clean_name = f"{timestamp}_{clean_course}.pdf"
+                    
+                    file_bytes = pdf.read()
+                    
+                    # Upload to Supabase Storage Bucket
+                    supabase.storage.from_("moellim-pdfs").upload(
+                        clean_name, 
+                        file_bytes, 
+                        {"content-type": "application/pdf", "upsert": "true"}
+                    )
+                    
+                    public_url = supabase.storage.from_("moellim-pdfs").get_public_url(clean_name)
+
+                    record = {
+                        "course_title": course,
+                        "instructor_name": instructor,
+                        "email": email,
+                        "pdf_url": public_url,
+                        "status": "Pending Review",
+                        "feedback": "Awaiting initial review"
+                    }
+                    supabase.table("submissions").insert(record).execute()
+                    st.success(f"Successfully submitted feedback form for {course}!")
+
+    # --- TRACK STATUS TAB ---
+    with tab_track:
+        st.header("Track Your Submission Status")
+        search_email = st.text_input("Enter your registered email to view feedback:")
+        
+        if search_email:
+            response = supabase.table("submissions").select("*").eq("email", search_email.strip()).execute()
+            data = response.data
+            
+            if data:
+                st.write(f"Found **{len(data)}** submission(s) for `{search_email}`:")
+                for item in data:
+                    with st.expander(f"📚 {item['course_title']} — Status: **{item['status']}**"):
+                        st.write(f"**Submitted Date:** {item['created_at'][:10]}")
+                        st.write(f"**Feedback / Comments:** {item['feedback']}")
+                        if item.get('pdf_url'):
+                            st.markdown(f"[📄 View Uploaded Document]({item['pdf_url']})")
+            else:
+                st.info("No submissions found under this email address.")
+
+# ==========================================
+# 2. EVALUATOR / ADMIN PORTAL (PROTECTED)
+# ==========================================
+elif role == "Evaluator (Admin) Portal":
+    st.title("QEC Evaluator Portal")
+
+    # Simple Password Gate
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if not st.session_state.authenticated:
+        pwd_input = st.text_input("Enter Admin Password:", type="password")
+        if st.button("Login"):
+            if pwd_input == ADMIN_PASSWORD:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Incorrect Password.")
+    else:
+        if st.sidebar.button("Logout Admin"):
+            st.session_state.authenticated = False
+            st.rerun()
+
+        st.subheader("Manage & Grade Submissions")
+        
+        # Retrieve all submissions
+        res = supabase.table("submissions").select("*").order("created_at", desc=True).execute()
+        rows = res.data
+
+        if rows:
+            for row in rows:
+                with st.expander(f"Review: {row['course_title']} (Instructor: {row['instructor_name']})"):
+                    st.write(f"**Email:** {row['email']}")
+                    st.write(f"**Current Status:** {row['status']}")
+                    st.markdown(f"[📄 Download/View PDF]({row['pdf_url']})")
+
+                    with st.form(f"review_form_{row['id']}"):
+                        new_status = st.selectbox(
+                            "Update Status", 
+                            ["Pending Review", "Approved", "Changes Requested", "Rejected"],
+                            index=["Pending Review", "Approved", "Changes Requested", "Rejected"].index(row.get("status", "Pending Review"))
+                        )
+                        new_feedback = st.text_area("Review Comments / Feedback", value=row.get("feedback", ""))
+                        
+                        if st.form_submit_button("Save & Send Review"):
+                            supabase.table("submissions").update({
+                                "status": new_status,
+                                "feedback": new_feedback
+                            }).eq("id", row["id"]).execute()
+                            
+                            st.success(f"Updated status for {row['course_title']}!")
+                            st.rerun()
         else:
-            st.dataframe(df, use_container_width=True)
-            course_choice = st.selectbox("Select course to evaluate:", df["course_title"].tolist())
-            row = df[df["course_title"] == course_choice].iloc[0]
-
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write(f"**Instructor:** {row['instructor_name']}")
-                st.write(f"**Email:** {row['email']}")
-                st.markdown(f"[View/Download Submitted PDF]({row['pdf_url']})")
-
-            with col2:
-                status = st.selectbox("Decision", ["Approved", "Needs revision", "Approved with changes"])
-                feedback = st.text_area("Remarks", value=str(row['feedback']) if pd.notna(row['feedback']) else "")
-
-                if st.button("Save Evaluation & Send Email"):
-                    supabase.table("submissions").update({
-                        "status": status,
-                        "feedback": feedback
-                    }).eq("course_title", course_choice).execute()
-
-                    success, msg = send_review_email(row['email'], row['instructor_name'], course_choice, status, feedback)
-                    if success:
-                        st.success(f"Saved & emailed to {row['email']}!")
-                    else:
-                        st.warning(f"Saved to DB, email failed: {msg}")
-                    st.rerun()
-    elif admin_pw:
-        st.error("Incorrect password.")
+            st.info("No course page submissions found.")
