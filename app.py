@@ -1,5 +1,7 @@
 import streamlit as st
 import time
+import io
+import pandas as pd
 from datetime import datetime
 from supabase import create_client, Client
 
@@ -12,9 +14,27 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.set_page_config(page_title="Moellim Course Page Review", layout="wide")
 
+# ==========================================
+# CONFIGURATION: SUBMISSION DEADLINE
+# ==========================================
+# Set your desired deadline here (Format: YYYY-MM-DD HH:MM:SS)
+SUBMISSION_DEADLINE = datetime(2026, 11, 1, 23, 59, 59)
+
 # Sidebar Role Selector
 st.sidebar.title("Navigation")
 role = st.sidebar.radio("Select View:", ["Instructor Portal", "Evaluator (Admin) Portal"])
+
+# Deadline Countdown / Notice in Sidebar
+now = datetime.now()
+is_deadline_passed = now > SUBMISSION_DEADLINE
+
+st.sidebar.divider()
+st.sidebar.subheader("📅 Submission Deadline")
+st.sidebar.caption(f"**Deadline:** {SUBMISSION_DEADLINE.strftime('%b %d, %Y at %I:%M %p')}")
+if is_deadline_passed:
+    st.sidebar.error("🔒 Submission Portal Closed")
+else:
+    st.sidebar.success("🟢 Submissions Active")
 
 
 # Dialog Pop-up for Submission Confirmation
@@ -29,6 +49,32 @@ def show_submission_popup(course, tracking_token, timestamp_str):
         st.rerun()
 
 
+# Function to generate Excel Summary Report using pandas/openpyxl
+def generate_excel_report(data):
+    if not data:
+        return None
+    
+    df = pd.DataFrame(data)
+    
+    # Rename and clean columns for export
+    export_df = pd.DataFrame({
+        "Submission ID": df.get("id", ""),
+        "Instructor Name": df.get("instructor_name", ""),
+        "Instructor Email": df.get("email", ""),
+        "Course Title & Code": df.get("course_title", ""),
+        "Submission Status": df.get("status", "Pending Review"),
+        "Submitted At": df.get("created_at", "").apply(lambda x: str(x)[:10] if x else ""),
+        "Reviewer Feedback": df.get("feedback", ""),
+        "PDF Document Link": df.get("pdf_url", "")
+    })
+    
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        export_df.to_excel(writer, index=False, sheet_name="QEC Submissions Summary")
+    
+    return output.getvalue()
+
+
 # ==========================================
 # 1. INSTRUCTOR PORTAL (PUBLIC)
 # ==========================================
@@ -40,53 +86,53 @@ if role == "Instructor Portal":
     # --- SUBMIT TAB ---
     with tab_submit:
         st.header("Submit Course Page for QEC Review")
-        with st.form("faculty_submission", clear_on_submit=True):
-            course = st.text_input("Course Title & Code *")
-            instructor = st.text_input("Instructor Name *")
-            email = st.text_input("Instructor Email *")
-            pdf = st.file_uploader("Upload Moellim Page PDF *", type=["pdf"])
+        
+        # DEADLINE CHECK
+        if is_deadline_passed:
+            st.error(f"🔒 The submission portal closed on **{SUBMISSION_DEADLINE.strftime('%B %d, %Y at %I:%M %p')}**. New uploads are no longer accepted.")
+            st.info("If you require an extension, please contact the QEC administration team.")
+        else:
+            with st.form("faculty_submission", clear_on_submit=True):
+                course = st.text_input("Course Title & Code *")
+                instructor = st.text_input("Instructor Name *")
+                email = st.text_input("Instructor Email *")
+                pdf = st.file_uploader("Upload Moellim Page PDF *", type=["pdf"])
 
-            submitted = st.form_submit_button("Submit")
-            if submitted:
-                if not course or not instructor or not email or not pdf:
-                    st.error("Please fill in all required fields and upload your PDF.")
-                elif pdf.size > 25 * 1024 * 1024:
-                    st.error("File size exceeds 25MB limit.")
-                else:
-                    # Folder-safe naming
-                    clean_instructor = "".join(c if c.isalnum() else "_" for c in instructor.strip())
-                    clean_course = "".join(c if c.isalnum() else "_" for c in course.strip())
-                    
-                    timestamp_int = int(time.time())
-                    tracking_token = f"QEC-{timestamp_int}"
-                    timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    # Store inside dynamic subfolders
-                    file_path = f"{clean_instructor}/{clean_course}/{timestamp_int}_submission.pdf"
-                    
-                    file_bytes = pdf.read()
-                    
-                    # Upload to Supabase Storage Bucket
-                    supabase.storage.from_("moellim-pdfs").upload(
-                        file_path, 
-                        file_bytes, 
-                        {"content-type": "application/pdf", "upsert": "true"}
-                    )
-                    
-                    public_url = supabase.storage.from_("moellim-pdfs").get_public_url(file_path)
+                submitted = st.form_submit_button("Submit")
+                if submitted:
+                    if not course or not instructor or not email or not pdf:
+                        st.error("Please fill in all required fields and upload your PDF.")
+                    elif pdf.size > 25 * 1024 * 1024:
+                        st.error("File size exceeds 25MB limit.")
+                    else:
+                        clean_instructor = "".join(c if c.isalnum() else "_" for c in instructor.strip())
+                        clean_course = "".join(c if c.isalnum() else "_" for c in course.strip())
+                        
+                        timestamp_int = int(time.time())
+                        tracking_token = f"QEC-{timestamp_int}"
+                        timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        
+                        file_path = f"{clean_instructor}/{clean_course}/{timestamp_int}_submission.pdf"
+                        file_bytes = pdf.read()
+                        
+                        supabase.storage.from_("moellim-pdfs").upload(
+                            file_path, 
+                            file_bytes, 
+                            {"content-type": "application/pdf", "upsert": "true"}
+                        )
+                        
+                        public_url = supabase.storage.from_("moellim-pdfs").get_public_url(file_path)
 
-                    record = {
-                        "course_title": course.strip(),
-                        "instructor_name": instructor.strip(),
-                        "email": email.strip().lower(),
-                        "pdf_url": public_url,
-                        "status": "Pending Review",
-                        "feedback": "Awaiting initial review"
-                    }
-                    supabase.table("submissions").insert(record).execute()
-                    
-                    # Trigger Pop-up
-                    show_submission_popup(course, tracking_token, timestamp_str)
+                        record = {
+                            "course_title": course.strip(),
+                            "instructor_name": instructor.strip(),
+                            "email": email.strip().lower(),
+                            "pdf_url": public_url,
+                            "status": "Pending Review",
+                            "feedback": "Awaiting initial review"
+                        }
+                        supabase.table("submissions").insert(record).execute()
+                        show_submission_popup(course, tracking_token, timestamp_str)
 
     # --- TRACK STATUS TAB (GROUPED BY EMAIL) ---
     with tab_track:
@@ -105,13 +151,11 @@ if role == "Instructor Portal":
                 st.caption(f"Showing **{len(data)}** total submission(s) for **{instructor_name}**")
                 st.divider()
 
-                # Group Submissions by Course Code/Title
                 course_groups = {}
                 for item in data:
                     c_title = item.get("course_title", "Uncategorized Course")
                     course_groups.setdefault(c_title, []).append(item)
 
-                # Render Grouped Cards
                 for c_title, submissions in course_groups.items():
                     st.subheader(f"📖 {c_title}")
                     
@@ -139,12 +183,11 @@ if role == "Instructor Portal":
                 st.info("No course submissions found associated with this email address.")
 
 # ==========================================
-# 2. EVALUATOR / ADMIN PORTAL (PROTECTED - EMAIL GROUPED)
+# 2. EVALUATOR / ADMIN PORTAL (PROTECTED)
 # ==========================================
 elif role == "Evaluator (Admin) Portal":
     st.title("QEC Evaluator Portal")
 
-    # Password Authentication Gate
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
 
@@ -161,14 +204,26 @@ elif role == "Evaluator (Admin) Portal":
             st.session_state.authenticated = False
             st.rerun()
 
-        st.subheader("Manage & Grade Submissions (Grouped by Email)")
+        st.subheader("Manage & Grade Submissions")
 
-        # Fetch all submissions ordered by newest first
+        # Fetch all submissions
         res = supabase.table("submissions").select("*").order("created_at", desc=True).execute()
         rows = res.data
 
+        # --- EXCEL REPORT GENERATION BUTTON ---
+        col_title, col_export = st.columns([3, 1])
+        with col_export:
+            if rows:
+                excel_bytes = generate_excel_report(rows)
+                st.download_button(
+                    label="📊 Export Summary Excel Sheet",
+                    data=excel_bytes,
+                    file_name=f"QEC_Submissions_Report_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
         if rows:
-            # Group submissions strictly by Email
+            # Group submissions by Email
             email_groups = {}
             for row in rows:
                 instructor_email = row.get("email", "no-email@provided.com").strip().lower()
@@ -179,7 +234,6 @@ elif role == "Evaluator (Admin) Portal":
 
             status_options = ["Pending Review", "Approved", "Changes Requested", "Rejected"]
 
-            # Loop through each instructor email group
             for email_addr, submissions in email_groups.items():
                 instructor_name = submissions[0].get("instructor_name", "Instructor")
                 
